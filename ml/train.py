@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix
-from preprocess import load_sessions, preprocess, create_windows, build_feature_matrix, normalize_features
+from preprocess import load_sessions, preprocess, segment_reps, extract_features
 
 def cross_validate(X, y, sessions):
     unique_sessions = np.unique(sessions)
@@ -14,6 +14,11 @@ def cross_validate(X, y, sessions):
 
         X_train, X_test = X[train_mask], X[test_mask]
         y_train, y_test = y[train_mask], y[test_mask]
+
+        mean = X_train.mean(axis=0)
+        std = X_train.std(axis=0) + 1e-8
+        X_train = (X_train - mean) / std
+        X_test = (X_test - mean) / std
 
         clf = RandomForestClassifier(n_estimators=100, random_state=42)
         clf.fit(X_train, y_train)
@@ -27,9 +32,18 @@ def cross_validate(X, y, sessions):
 if __name__ == '__main__':
     df = load_sessions('../emg_sessions')
     df = preprocess(df)
-    windows, labels, sessions = create_windows(df)
-    X, y, sessions = build_feature_matrix(windows, labels, sessions)
-    X = normalize_features(X, sessions)
+    rep_signals, y, sessions = segment_reps(df)
+
+    X = np.array([extract_features(r) for r in rep_signals])
+    print(f'Total reps: {len(rep_signals)}')
+    print(f'Labels: {np.unique(y, return_counts=True)}')
+
+    clf_full = RandomForestClassifier(n_estimators=100, random_state=42)
+    clf_full.fit(X, y)
+    feat_names = ['rms','mav','wl','var','skew','kurt','mean_freq']
+    importances = pd.Series(clf_full.feature_importances_, index=feat_names).sort_values(ascending=False)
+    print(importances)
+
     cross_validate(X, y, sessions)
 
 
