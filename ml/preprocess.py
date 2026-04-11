@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np 
-from scipy.signal import butter, filtfilt 
+from scipy.signal import butter, filtfilt
 from pathlib import Path 
 import os
 
@@ -49,7 +49,7 @@ def create_windows(df, window_size=100, overlap=0.5):
     return np.array(windows), np.array(labels), np.array(sessions)
 
 def extract_features(window, fs=500):
-    # time
+    # time-domain
     rms = np.sqrt(np.mean(window**2))
     mav = np.mean(np.abs(window))
     wl = np.sum(np.abs(np.diff(window)))
@@ -57,11 +57,32 @@ def extract_features(window, fs=500):
     skew = pd.Series(window).skew()
     kurt = pd.Series(window).kurt()
 
-    # freq
+    # freq with Hann window (fixes spectral leakage, guards against zero-sum)
     freqs = np.fft.rfftfreq(len(window), d=1/fs)
-    power = np.abs(np.fft.rfft(window))**2
-    mean_freq = np.sum(freqs * power) / np.sum(power)
-    return [rms, mav, wl, var, skew, kurt, mean_freq]
+    hann = np.hanning(len(window))
+    power = np.abs(np.fft.rfft(window * hann))**2
+    mean_freq = np.sum(freqs * power) / (np.sum(power) + 1e-8)
+
+    # envelope shape features
+    peak_idx = np.argmax(window)
+    peak_loc = peak_idx / max(len(window) - 1, 1)
+    # where in the rep the peak occurs (0=start, 1=end); good form peaks ~0.4-0.6
+
+    peak_ratio = np.max(window) / (np.mean(window) + 1e-8)
+    # spike vs sustained effort; bad form (momentum) = high spike, low mean = high ratio
+
+    smoothness = np.mean(np.abs(np.diff(window, n=2))) if len(window) > 2 else 0.0
+    # 2nd derivative = choppiness; distinct from wl (total path length)
+
+    # rep shape: activation slopes
+    # rise: avg slope from rep start to peak (bad form rises sharply via momentum)
+    rise_slope = (window[peak_idx] - window[0]) / (peak_idx + 1e-8)
+    # fall: avg slope from peak back to rep end (controlled descent = good form)
+    fall_slope = (window[peak_idx] - window[-1]) / ((len(window) - peak_idx) + 1e-8)
+
+    return [rms, mav, wl, var, skew, kurt, mean_freq,
+            peak_loc, peak_ratio, smoothness,
+            rise_slope, fall_slope]
 
 def build_feature_matrix(windows, labels, sessions):
     features = [extract_features(w) for w in windows]

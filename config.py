@@ -4,7 +4,7 @@
 
 # Serial port — run `ls /dev/cu.*` in terminal to find yours (Mac)
 # On Windows it will look like 'COM3', 'COM4', etc.
-PORT = 'COM6'
+PORT = 'COM5'
 BAUD_RATE = 115200
 
 # Data storage
@@ -24,5 +24,5 @@ ZERO_CAL_SECONDS = 2       # seconds of rest data collected to measure the senso
 # REP_THRESHOLD is compared against the RMS amplitude of a short rolling window
 # (not a single sample). Raw EMG is AC, so instantaneous values are tiny even
 # during a strong contraction — RMS captures the true envelope.
-REP_THRESHOLD = 50         # RMS ADC units above zero; raise if false-triggers, lower if reps are missed
+REP_THRESHOLD = 25         # RMS ADC units above zero; raise if false-triggers, lower if reps are missed
 REP_HOLD_MS = 150          # ms the RMS must stay above threshold before recording starts
