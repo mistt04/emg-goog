@@ -50,12 +50,10 @@ def create_windows(df, window_size=100, overlap=0.5):
 
 def extract_features(window, fs=500):
     # time-domain
-    rms = np.sqrt(np.mean(window**2))
     mav = np.mean(np.abs(window))
     wl = np.sum(np.abs(np.diff(window)))
     var = np.var(window)
     skew = pd.Series(window).skew()
-    kurt = pd.Series(window).kurt()
 
     # freq with Hann window (fixes spectral leakage, guards against zero-sum)
     freqs = np.fft.rfftfreq(len(window), d=1/fs)
@@ -80,9 +78,29 @@ def extract_features(window, fs=500):
     # fall: avg slope from peak back to rep end (controlled descent = good form)
     fall_slope = (window[peak_idx] - window[-1]) / ((len(window) - peak_idx) + 1e-8)
 
-    return [rms, mav, wl, var, skew, kurt, mean_freq,
+    # number of secondary peaks — bad form (bounce/momentum) produces multiple humps
+    if len(window) > 2:
+        diff1 = np.diff(window)
+        sign_changes = np.diff(np.sign(diff1))
+        n_peaks = int(np.sum(sign_changes < 0))  # count downward sign changes = local maxima
+    else:
+        n_peaks = 0
+
+    # Hjorth complexity — how much the frequency content changes over time;
+    # choppy bad-form activation is more complex than smooth good-form
+    if len(window) > 2:
+        d1 = np.diff(window)
+        d2 = np.diff(window, n=2)
+        mob_signal = np.sqrt(np.var(d1) / (np.var(window) + 1e-8))
+        mob_d1     = np.sqrt(np.var(d2) / (np.var(d1)     + 1e-8))
+        complexity = mob_d1 / (mob_signal + 1e-8)
+    else:
+        complexity = 0.0
+
+    return [mav, wl, var, skew, mean_freq,
             peak_loc, peak_ratio, smoothness,
-            rise_slope, fall_slope]
+            rise_slope, fall_slope,
+            n_peaks, complexity]
 
 def build_feature_matrix(windows, labels, sessions):
     features = [extract_features(w) for w in windows]

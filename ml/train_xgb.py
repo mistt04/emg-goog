@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import joblib
-from itertools import product
+from joblib import Parallel, delayed
 from tqdm import tqdm
 from xgboost import XGBClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
@@ -15,62 +15,64 @@ TEST_SESSIONS = {
     'bad_20260410_172942',
 }
 
-FEAT_NAMES = ['rms', 'mav', 'wl', 'var', 'skew', 'kurt', 'mean_freq',
+FEAT_NAMES = ['mav', 'wl', 'var', 'skew', 'mean_freq',
               'peak_loc', 'peak_ratio', 'smoothness',
-              'rise_slope', 'fall_slope']
+              'rise_slope', 'fall_slope',
+              'n_peaks', 'complexity']
+
+XGB_DEVICE = {}  # GPU slower than CPU on this dataset size; set {'device':'cuda','tree_method':'hist'} to try
 
 
 # ---------------------------------------------------------------------------
 # Hyperparameter tuning
 # ---------------------------------------------------------------------------
 
+def _evaluate_combo(params, X, y_int, session_groups):
+    """Run LOGO CV for one param combo. Called in parallel."""
+    logo = LeaveOneGroupOut()
+    fold_scores = []
+    for train_idx, test_idx in logo.split(X, y_int, groups=session_groups):
+        X_tr, X_te = X[train_idx], X[test_idx]
+        y_tr, y_te = y_int[train_idx], y_int[test_idx]
+        scaler = StandardScaler()
+        X_tr = scaler.fit_transform(X_tr)
+        X_te = scaler.transform(X_te)
+        clf = XGBClassifier(
+            **params,
+            n_jobs=1,             # 1 thread per fit — cores used at the combo level
+            use_label_encoder=False,
+            eval_metric='logloss',
+            random_state=42,
+            verbosity=0,
+        )
+        clf.fit(X_tr, y_tr)
+        fold_scores.append(np.mean(clf.predict(X_te) == y_te))
+    return np.mean(fold_scores)
+
+
 def tune_xgboost(X, y_int, session_groups):
-    """Grid search over XGBoost params using leave-one-session-out CV."""
+    """Random search over XGBoost params using leave-one-session-out CV."""
     param_grid = {
         'max_depth':        [3, 4, 5],
         'learning_rate':    [0.02, 0.05, 0.1],
         'n_estimators':     [200, 400],
         'subsample':        [0.7, 0.8],
         'colsample_bytree': [0.7, 0.8],
-        'min_child_weight': [1, 3, 5],
-        'reg_lambda':       [1, 2, 5],
-        'reg_alpha':        [0, 0.1, 1.0],
-        'gamma':            [0, 0.1, 0.5],
     }
 
+    from itertools import product
     keys   = list(param_grid.keys())
-    combos = list(product(*param_grid.values()))
-    logo   = LeaveOneGroupOut()
+    combos = [dict(zip(keys, values)) for values in product(*param_grid.values())]
 
-    best_score  = -1
-    best_params = None
+    print(f'Grid search: {len(combos)} combos across {len(param_grid)} params')
+    scores = Parallel(n_jobs=-1)(
+        delayed(_evaluate_combo)(params, X, y_int, session_groups)
+        for params in tqdm(combos, desc='Tuning XGBoost', unit='combo')
+    )
 
-    for values in tqdm(combos, desc='Tuning XGBoost', unit='combo'):
-        params = dict(zip(keys, values))
-        fold_scores = []
-
-        for train_idx, test_idx in logo.split(X, y_int, groups=session_groups):
-            X_tr, X_te = X[train_idx], X[test_idx]
-            y_tr, y_te = y_int[train_idx], y_int[test_idx]
-
-            scaler = StandardScaler()
-            X_tr = scaler.fit_transform(X_tr)
-            X_te = scaler.transform(X_te)
-
-            clf = XGBClassifier(
-                **params,
-                use_label_encoder=False,
-                eval_metric='logloss',
-                random_state=42,
-                verbosity=0,
-            )
-            clf.fit(X_tr, y_tr)
-            fold_scores.append(np.mean(clf.predict(X_te) == y_te))
-
-        score = np.mean(fold_scores)
-        if score > best_score:
-            best_score  = score
-            best_params = params
+    best_idx    = int(np.argmax(scores))
+    best_params = combos[best_idx]
+    best_score  = scores[best_idx]
 
     print(f'\nBest params: {best_params}')
     print(f'Best CV accuracy: {best_score:.3f}\n')
@@ -116,6 +118,7 @@ def cross_validate_xgb(X, y, sessions, xgb_params):
             eval_metric='logloss',
             random_state=42,
             verbosity=0,
+            **XGB_DEVICE,
         )
         clf.fit(X_train, y_train)
         train_acc = np.mean(clf.predict(X_train) == y_train)
@@ -205,8 +208,8 @@ if __name__ == '__main__':
     # 3. CV
     cross_validate_xgb(X_dev, y_dev, sessions_dev, xgb_params)
 
-    # 4. Uncomment ONLY when done making decisions:
-    # evaluate_test_set(X_dev, y_dev, X_test, y_test, xgb_params)
+    # 4. Final test set evaluation
+    evaluate_test_set(X_dev, y_dev, X_test, y_test, xgb_params)
 
     # 5. Save model and normalization stats for real-time inference
     joblib.dump({

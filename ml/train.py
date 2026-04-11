@@ -78,9 +78,10 @@ if __name__ == '__main__':
     mean = X_dev.mean(axis=0)
     std = X_dev.std(axis=0) + 1e-8
     clf_full.fit((X_dev - mean) / std, y_dev)
-    feat_names = ['rms','mav','wl','var','skew','kurt','mean_freq',
+    feat_names = ['mav','wl','var','skew','mean_freq',
                   'peak_loc','peak_ratio','smoothness',
-                  'rise_slope','fall_slope']
+                  'rise_slope','fall_slope',
+                  'n_peaks','complexity']
     importances = pd.Series(clf_full.feature_importances_, index=feat_names).sort_values(ascending=False)
     print(importances)
 
